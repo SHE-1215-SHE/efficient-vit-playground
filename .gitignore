@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# 虚拟环境
+.env/
+.venv/
+venv/
+
+# 数据与权重（不上传 GitHub）
+data/
+checkpoints/
+*.pth
+*.pt
+*.onnx
+*.safetensors
+
+# 实验输出
+outputs/
+runs/
+*.log
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 隐私文件（求职信息不上传）
+要求.jpg

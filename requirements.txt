@@ -1,0 +1,16 @@
+# 第①阶段核心依赖
+# 服务器(3090)安装 GPU 版 torch 时请用官方命令，例如：
+#   pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121
+# 然后再安装本文件其余依赖：
+#   pip install -r requirements.txt
+torch>=2.1
+torchvision>=0.16
+timm>=1.0.3
+fvcore>=0.1.5.post20221221
+pillow>=10.0
+tqdm>=4.66
+pyyaml>=6.0
+
+# 第③阶段会用到的（现在装上也无妨）
+onnx>=1.16
+onnxruntime>=1.18
