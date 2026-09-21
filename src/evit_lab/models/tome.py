@@ -74,58 +74,55 @@ def bipartite_merge(x: torch.Tensor, metric: torch.Tensor, r: int,
     return out, r
 
 
-def _key_metric(norm_x: torch.Tensor, attn: torch.nn.Module) -> torch.Tensor:
-    """用该层注意力的 K 投影计算 token 表征（论文指定做法）。"""
-    w = attn.qkv.weight                                # (3C, C)
-    c = w.shape[1]
-    metric = norm_x @ w[c:2 * c].t()                   # 取K部分的权重
-    if attn.qkv.bias is not None:
-        metric = metric + attn.qkv.bias[c:2 * c]
-    return metric
-
-
 def _tome_block_forward(self, x: torch.Tensor, attn_mask=None, is_causal=False):
     """替换 timm Block.forward：attention -> 合并 -> MLP。
 
-    自适应模式（strength>0）下，额外从该层注意力计算 CLS 行的归一化熵，
-    熵低（CLS已聚焦/信息清晰）多删，熵高（混乱/难图）少删，
-    每层实际合并数 r_t = r_base * (1 + strength * (1 - 2*H_norm))，
-    strength=0 退化为固定 r 的原版 ToMe（可做消融对照）。
+    性能关键点: 整层只算一次 qkv（block 内部 attention 自带的那次），
+    通过 hook 存到 cfg._qkv，metric(取K段)和熵(取Q,K段)直接切片复用，
+    不再重复投影 —— 修复自适应模式 qkv 三重计算导致的 -40% 速度回退。
+
+    自适应模式（strength>0）下，用 CLS 行注意力的归一化熵缩放本层合并数:
+    熵低（CLS已聚焦）多删, 熵高（混乱/难图）少删;
+    r_t = r_base * (1 + strength * (1 - 2*H_norm)), strength=0 退化为原版 ToMe。
     """
     cfg = self._tome_cfg
     norm_x = self.norm1(x)
-
-    r_t = cfg.r
-    if cfg.strength > 0 and cfg.r > 0:
-        r_t = _adaptive_r(norm_x, self.attn, cfg)
     attn_out = self.attn(norm_x, attn_mask=attn_mask, is_causal=is_causal)
     x = x + self.drop_path1(self.ls1(attn_out))
 
-    if r_t > 0 and x.shape[1] > cfg.min_tokens:
-        metric = _key_metric(norm_x, self.attn)
+    if cfg.r > 0 and x.shape[1] > cfg.min_tokens:
+        qkv = getattr(cfg, "_qkv", None)          # (B, N, 3C) hook存好
+        if qkv is None:                            # 兜底: hook未触发时显式算一次
+            qkv = self.attn.qkv(norm_x)
+        C = qkv.shape[-1] // 3
+        metric = qkv[..., C:2 * C]                 # K段即metric, 切片零开销
+        if cfg.strength > 0:
+            r_t = _adaptive_r_from_qkv(qkv, self.attn, cfg)
+        else:
+            r_t = cfg.r
         x, merged = bipartite_merge(x, metric, r_t, protect_cls=True)
         cfg.info["r"].append(merged)
+    cfg._qkv = None                                # 释放引用
 
     x = x + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
     return x
 
 
-def _adaptive_r(norm_x: torch.Tensor, attn: torch.nn.Module, cfg) -> int:
-    """用 CLS 注意力行的归一化熵决定本层合并数（batch 均值，逐层自适应）。
+def _adaptive_r_from_qkv(qkv: torch.Tensor, attn: torch.nn.Module, cfg) -> int:
+    """从已算好的 qkv 计算 CLS 行归一化熵, 决定本层合并数（batch 均值）。
 
     熵的直觉: CLS 对各 token 的注意力越均匀(熵高)说明模型还没分清主次,
     此时少删; 越尖锐(熵低)说明关键 token 已明确, 其余冗余度高, 多删。
-    返回本层的 r_t, 四舍五入到整数。
     """
-    B, N, C = norm_x.shape
+    B, N, C3 = qkv.shape
+    C = C3 // 3
     H, d = attn.num_heads, C // attn.num_heads
-    qkv = attn.qkv(norm_x).reshape(B, N, 3, H, d).permute(2, 0, 3, 1, 4)
-    q, k = qkv[0], qkv[1]
+    qkv3 = qkv.reshape(B, N, 3, H, d).permute(2, 0, 3, 1, 4)
+    q, k = qkv3[0], qkv3[1]
     # CLS 行注意力概率 (B, N): 只算一行, 开销可忽略
     cls_row = (q[:, :, 0:1] @ k.transpose(-1, -2)) * attn.scale
     p = cls_row.softmax(dim=-1).squeeze(2).mean(dim=1)        # (B, N)
-    # 去掉 cls 自身与 patch token 里接近零的概率, 归一化到 [0,1]
-    p = p[:, 1:]
+    p = p[:, 1:]                                              # 去掉cls自身
     p = p / p.sum(dim=-1, keepdim=True).clamp_min(1e-9)
     h = -(p * (p + 1e-9).log()).sum(-1)                       # (B,) 熵
     h_norm = (h / torch.log(torch.tensor(float(p.shape[-1]), device=h.device))).mean()
@@ -145,9 +142,12 @@ def apply_tome(model: torch.nn.Module, r: int, min_tokens: int = 8,
                   缩放 r（本项目创新点：熵引导的逐层自适应预算）
     """
     for blk in model.blocks:
-        blk._tome_cfg = SimpleNamespace(r=r, min_tokens=min_tokens,
-                                        strength=strength, info={"r": []})
+        cfg = SimpleNamespace(r=r, min_tokens=min_tokens,
+                              strength=strength, info={"r": []}, _qkv=None)
+        blk._tome_cfg = cfg
         blk.forward = types.MethodType(_tome_block_forward, blk)
+        blk._tome_hook = blk.attn.qkv.register_forward_hook(
+            lambda m, i, o, _cfg=cfg: setattr(_cfg, "_qkv", o))
     model._tome_r = r
     model._tome_strength = strength
     return model

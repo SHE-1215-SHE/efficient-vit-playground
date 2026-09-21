@@ -63,14 +63,17 @@ def main():
     parser.add_argument("--tome-strength", type=float, default=0.0,
                         help="ToMe 自适应强度 0~1（0=固定预算原版；>0=熵引导逐层自适应，本项目创新点）")
     parser.add_argument("--evit-k", type=int, default=0,
-                        help=">0 时启用 EViT（每层保留 k 个普通 token）；需配合 deit3/vit 权重")
+                        help=">0 时启用 EViT（保留 k 个普通 token）；需配合 deit3/vit 权重")
+    parser.add_argument("--evit-start", type=int, default=4,
+                        help="EViT 从第几层开始剪枝（论文默认4, 1=复现过早剪枝消融）")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"设备: {device}")
 
     model = build_model(args.model, pretrained=True, tome_r=args.tome_r,
-                        tome_strength=args.tome_strength, evit_k=args.evit_k).to(device)
+                        tome_strength=args.tome_strength, evit_k=args.evit_k,
+                        evit_start=args.evit_start).to(device)
 
     # 预处理必须和 timm 模型训练时一致（resize尺寸/归一化均值方差），
     # 用错预处理是新手最常见的「精度莫名其妙低」的原因
@@ -92,6 +95,12 @@ def main():
     top1, top5 = evaluate(model, loader, device)
 
     print(f"Top-1: {top1:.2f}%   Top-5: {top5:.2f}%")
+    # 自适应模式的关键诊断信息: 每层实际合并数(最后一个batch的采样值)
+    if args.tome_r > 0 and args.tome_strength > 0:
+        from evit_lab.models.tome import tome_token_counts
+        counts = tome_token_counts(model)
+        print(f"实际每层合并数(末batch采样): {counts}  合计 {sum(counts)}")
+        print(f"实际最终token数: {197 - sum(counts)}")
 
 
 if __name__ == "__main__":

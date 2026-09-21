@@ -50,15 +50,20 @@ def main():
 
     # ---- 检查2: 序列稳定在 K+1 ----
     evit = copy.deepcopy(base)
-    apply_evit(evit, keep_num=args.k)
+    apply_evit(evit, keep_num=args.k)   # 默认第4层开始剪枝(论文协议)
     evit.eval()
     with torch.no_grad():
         y_evit = evit(x)
     removed = evit_removed_counts(evit)
-    # 第1层: 196个普通token -> 保留99+1融合=100个, 丢97个; 之后序列不再超预算, 保持稳定
-    assert removed[0] == 196 - (args.k - 1), f"第1层应丢弃 {196 - (args.k - 1)} 个, 实际 {removed[0]}"
-    assert all(r == 0 for r in removed[1:]), f"稳态后不应再丢弃: {removed}"
-    print(f"[通过] 检查2 序列稳定: 第1层丢弃 {removed[0]} 个, 序列 197 -> {args.k + 1} 后保持不变")
+    # 第4层(start_layer默认=4, 0-indexed即第5个block前)才首次选择:
+    # 前4层(0~3)不丢弃; 首个选择层 196 -> K-1+1融合, 丢弃 196-(K-1)
+    # 之后序列恰好等于预算, 不再丢弃
+    assert all(r == 0 for r in removed[:4]), f"前4层不应丢弃(论文协议): {removed[:4]}"
+    assert removed[4] == 196 - (args.k - 1), \
+        f"第5个block应丢弃 {196 - (args.k - 1)} 个, 实际 {removed[4]}"
+    assert all(r == 0 for r in removed[5:]), f"稳态后不应再丢弃: {removed[5:]}"
+    print(f"[通过] 检查2 序列稳定: 前4层不剪, 第5块丢弃 {removed[4]} 个, "
+          f"197 -> {args.k + 1} 后保持不变")
 
     # ---- 检查3: 输出相关性 ----
     cos = torch.nn.functional.cosine_similarity(

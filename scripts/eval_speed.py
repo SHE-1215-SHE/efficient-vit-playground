@@ -32,7 +32,9 @@ def main():
     parser.add_argument("--tome-strength", type=float, default=0.0,
                         help="ToMe 自适应强度 0~1（0=固定预算；>0=熵引导逐层自适应）")
     parser.add_argument("--evit-k", type=int, default=0,
-                        help=">0 时启用 EViT（每层保留 k 个普通 token），如 --evit-k 100")
+                        help=">0 时启用 EViT（保留 k 个普通 token），如 --evit-k 100")
+    parser.add_argument("--evit-start", type=int, default=4,
+                        help="EViT 从第几层开始剪枝（论文默认4）")
     args = parser.parse_args()
 
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -45,7 +47,8 @@ def main():
     print(f"加载模型: {args.model} (pretrained={not args.no_pretrained}, "
           f"method={method}, tome_r={args.tome_r}, strength={args.tome_strength}, evit_k={args.evit_k})")
     model = build_model(args.model, pretrained=not args.no_pretrained, tome_r=args.tome_r,
-                        tome_strength=args.tome_strength, evit_k=args.evit_k)
+                        tome_strength=args.tome_strength, evit_k=args.evit_k,
+                        evit_start=args.evit_start)
 
     flops = count_flops(model, (1, 3, args.img_size, args.img_size))
     params = count_params(model)

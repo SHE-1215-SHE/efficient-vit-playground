@@ -27,7 +27,7 @@ import torch.nn.functional as F
 
 
 def evit_select_and_fuse(x: torch.Tensor, cls_attn: torch.Tensor, keep_num: int):
-    """按 CLS 注意力保留 top-K token，其余融合成 1 个 token。
+    """按 CLS 注意力保留 top-K token，其余按注意力加权融合成 1 个 token。
 
     Args:
         x: (B, N, C) 当前 token 序列
@@ -45,7 +45,10 @@ def evit_select_and_fuse(x: torch.Tensor, cls_attn: torch.Tensor, keep_num: int)
     drop_idx = order[:, keep_num - 1:]                        # 丢弃: 其余
     kept = tokens.gather(1, keep_idx.unsqueeze(-1).expand(-1, -1, C))
     dropped = tokens.gather(1, drop_idx.unsqueeze(-1).expand(-1, -1, C))
-    fused = dropped.mean(dim=1, keepdim=True)                 # 背景信息浓缩成1个token
+    # 论文式加权融合: 注意力越高的被丢弃token贡献越大(区别于简单均值)
+    w = cls_attn[:, 1:].gather(1, drop_idx)                   # (B, n_drop)
+    fused = (dropped * w.unsqueeze(-1)).sum(dim=1, keepdim=True) \
+        / w.sum(dim=1, keepdim=True).unsqueeze(-1).clamp_min(1e-9)  # (B,1,1)否则广播错位
     out = torch.cat([x[:, :1], kept, fused], dim=1)           # cls 恒在第0位
     return out, dropped.shape[1]
 
@@ -78,7 +81,9 @@ def _evit_block_forward(self, x: torch.Tensor, attn_mask=None, is_causal=False):
     attn_out = attn_mod.proj_drop(attn_mod.proj(attn_out))
     x = x + self.drop_path1(self.ls1(attn_out))
 
-    if cfg.keep_num > 0:
+    # 论文消融: 前几层的CLS注意力不可靠, 过早剪枝精度断崖下跌, 故从
+    # start_layer 层起才做选择（默认第4层, 与论文一致）
+    if cfg.keep_num > 0 and cfg.layer_idx >= cfg.start_layer:
         x, removed = evit_select_and_fuse(x, cls_attn, cfg.keep_num)
         cfg.info["removed"].append(removed)
 
@@ -86,18 +91,22 @@ def _evit_block_forward(self, x: torch.Tensor, attn_mask=None, is_causal=False):
     return x
 
 
-def apply_evit(model: torch.nn.Module, keep_num: int) -> torch.nn.Module:
+def apply_evit(model: torch.nn.Module, keep_num: int, start_layer: int = 4) -> torch.nn.Module:
     """给 timm VisionTransformer 挂上 EViT 选择逻辑。
 
     Args:
         model: timm 创建的 ViT
-        keep_num: 每层保留的普通 token 数；K=100 时序列 197 -> 101，
+        keep_num: 保留的普通 token 数；K=100 时最终序列 101（cls+100+融合），
                   与 ToMe r=8 (197->101) 的算力预算对齐，便于公平对比
+        start_layer: 从第几层开始剪枝（论文默认第4层; 设1可复现"过早剪枝"消融）
     """
-    for blk in model.blocks:
-        blk._evit_cfg = SimpleNamespace(keep_num=keep_num, info={"removed": []})
+    for i, blk in enumerate(model.blocks):
+        blk._evit_cfg = SimpleNamespace(keep_num=keep_num, layer_idx=i,
+                                        start_layer=start_layer,
+                                        info={"removed": []})
         blk.forward = types.MethodType(_evit_block_forward, blk)
     model._evit_k = keep_num
+    model._evit_start = start_layer
     return model
 
 
