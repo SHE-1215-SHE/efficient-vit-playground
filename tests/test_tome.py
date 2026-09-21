@@ -69,6 +69,23 @@ def main():
           + (" (预训练权重下应显著>0, 论文水平 r=8 约在 0.8+)" if pretrained
              else " (随机权重仅供参考, 加 --pretrained 才有意义)"))
 
+    # ---- 检查4: 熵引导自适应模式 ----
+    for strength in (0.0, 0.7):
+        ada = copy.deepcopy(base)
+        apply_tome(ada, args.r, strength=strength)
+        ada.eval()
+        with torch.no_grad():
+            ada(x)
+        counts = tome_token_counts(ada)
+        if strength == 0.0:
+            assert counts == expected, f"strength=0 应退化为固定r: {counts}"
+            print(f"[通过] 检查4a strength=0 退化为固定r: 每层 {counts[0]}")
+        else:
+            assert all(c > 0 for c in counts), f"自适应模式下每层都应合并>0: {counts}"
+            lo, hi = int(args.r * 0.3), int(args.r * 1.7) + 1
+            assert all(lo <= c <= hi for c in counts), f"自适应r超出合理范围: {counts}"
+            print(f"[通过] 检查4b strength={strength} 逐层自适应r: {counts}")
+
     print("\n全部检查通过")
 
 

@@ -59,6 +59,8 @@ def main():
     parser.add_argument("--limit", type=int, default=0, help="只测前N个batch（0=全量，调试用）")
     parser.add_argument("--tome-r", type=int, default=0,
                         help=">0 时启用 ToMe（每层合并 r 个 token）；需配合 deit3/vit 权重")
+    parser.add_argument("--tome-strength", type=float, default=0.0,
+                        help="ToMe 自适应强度 0~1（0=固定预算原版；>0=熵引导逐层自适应，本项目创新点）")
     parser.add_argument("--evit-k", type=int, default=0,
                         help=">0 时启用 EViT（每层保留 k 个普通 token）；需配合 deit3/vit 权重")
     args = parser.parse_args()
@@ -66,8 +68,8 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"设备: {device}")
 
-    model = build_model(args.model, pretrained=True,
-                        tome_r=args.tome_r, evit_k=args.evit_k).to(device)
+    model = build_model(args.model, pretrained=True, tome_r=args.tome_r,
+                        tome_strength=args.tome_strength, evit_k=args.evit_k).to(device)
 
     # 预处理必须和 timm 模型训练时一致（resize尺寸/归一化均值方差），
     # 用错预处理是新手最常见的「精度莫名其妙低」的原因

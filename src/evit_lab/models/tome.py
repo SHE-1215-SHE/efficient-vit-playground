@@ -85,34 +85,71 @@ def _key_metric(norm_x: torch.Tensor, attn: torch.nn.Module) -> torch.Tensor:
 
 
 def _tome_block_forward(self, x: torch.Tensor, attn_mask=None, is_causal=False):
-    """替换 timm Block.forward：attention -> 合并 -> MLP。"""
+    """替换 timm Block.forward：attention -> 合并 -> MLP。
+
+    自适应模式（strength>0）下，额外从该层注意力计算 CLS 行的归一化熵，
+    熵低（CLS已聚焦/信息清晰）多删，熵高（混乱/难图）少删，
+    每层实际合并数 r_t = r_base * (1 + strength * (1 - 2*H_norm))，
+    strength=0 退化为固定 r 的原版 ToMe（可做消融对照）。
+    """
     cfg = self._tome_cfg
     norm_x = self.norm1(x)
+
+    r_t = cfg.r
+    if cfg.strength > 0 and cfg.r > 0:
+        r_t = _adaptive_r(norm_x, self.attn, cfg)
     attn_out = self.attn(norm_x, attn_mask=attn_mask, is_causal=is_causal)
     x = x + self.drop_path1(self.ls1(attn_out))
 
-    if cfg.r > 0 and x.shape[1] > cfg.min_tokens:
+    if r_t > 0 and x.shape[1] > cfg.min_tokens:
         metric = _key_metric(norm_x, self.attn)
-        x, merged = bipartite_merge(x, metric, cfg.r, protect_cls=True)
+        x, merged = bipartite_merge(x, metric, r_t, protect_cls=True)
         cfg.info["r"].append(merged)
 
     x = x + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
     return x
 
 
-def apply_tome(model: torch.nn.Module, r: int, min_tokens: int = 8) -> torch.nn.Module:
+def _adaptive_r(norm_x: torch.Tensor, attn: torch.nn.Module, cfg) -> int:
+    """用 CLS 注意力行的归一化熵决定本层合并数（batch 均值，逐层自适应）。
+
+    熵的直觉: CLS 对各 token 的注意力越均匀(熵高)说明模型还没分清主次,
+    此时少删; 越尖锐(熵低)说明关键 token 已明确, 其余冗余度高, 多删。
+    返回本层的 r_t, 四舍五入到整数。
+    """
+    B, N, C = norm_x.shape
+    H, d = attn.num_heads, C // attn.num_heads
+    qkv = attn.qkv(norm_x).reshape(B, N, 3, H, d).permute(2, 0, 3, 1, 4)
+    q, k = qkv[0], qkv[1]
+    # CLS 行注意力概率 (B, N): 只算一行, 开销可忽略
+    cls_row = (q[:, :, 0:1] @ k.transpose(-1, -2)) * attn.scale
+    p = cls_row.softmax(dim=-1).squeeze(2).mean(dim=1)        # (B, N)
+    # 去掉 cls 自身与 patch token 里接近零的概率, 归一化到 [0,1]
+    p = p[:, 1:]
+    p = p / p.sum(dim=-1, keepdim=True).clamp_min(1e-9)
+    h = -(p * (p + 1e-9).log()).sum(-1)                       # (B,) 熵
+    h_norm = (h / torch.log(torch.tensor(float(p.shape[-1]), device=h.device))).mean()
+    f = 1.0 + cfg.strength * (1.0 - 2.0 * h_norm.item())
+    return max(1, round(cfg.r * f))
+
+
+def apply_tome(model: torch.nn.Module, r: int, min_tokens: int = 8,
+               strength: float = 0.0) -> torch.nn.Module:
     """给一个 timm VisionTransformer 挂上 ToMe 合并逻辑。
 
     Args:
         model: timm 创建的 ViT（要求每个 block 有 norm1/attn/mlp 标准结构）
-        r: 每层删除的 token 数；12层模型 r=8 时共删 96 个（197 -> 101）
+        r: 每层基准删除 token 数；12层模型 r=8 时共删 96 个（197 -> 101）
         min_tokens: 序列短于该值后停止合并，防止把 token 合没了
+        strength: 自适应强度 (0~1)。0=固定r(原版ToMe)；>0 时每层按注意力熵
+                  缩放 r（本项目创新点：熵引导的逐层自适应预算）
     """
     for blk in model.blocks:
         blk._tome_cfg = SimpleNamespace(r=r, min_tokens=min_tokens,
-                                        info={"r": []})
+                                        strength=strength, info={"r": []})
         blk.forward = types.MethodType(_tome_block_forward, blk)
     model._tome_r = r
+    model._tome_strength = strength
     return model
 
 

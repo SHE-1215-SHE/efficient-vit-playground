@@ -29,6 +29,8 @@ def main():
     parser.add_argument("--no-pretrained", action="store_true", help="测速不需要权重，跳过下载")
     parser.add_argument("--tome-r", type=int, default=0,
                         help=">0 时启用 ToMe（每层合并掉 r 个 token），如 --tome-r 8")
+    parser.add_argument("--tome-strength", type=float, default=0.0,
+                        help="ToMe 自适应强度 0~1（0=固定预算；>0=熵引导逐层自适应）")
     parser.add_argument("--evit-k", type=int, default=0,
                         help=">0 时启用 EViT（每层保留 k 个普通 token），如 --evit-k 100")
     args = parser.parse_args()
@@ -38,10 +40,12 @@ def main():
         args.device = "cpu"
 
     method = "tome" if args.tome_r > 0 else ("evit" if args.evit_k > 0 else "baseline")
+    if args.tome_r > 0 and args.tome_strength > 0:
+        method = "tome-adaptive"
     print(f"加载模型: {args.model} (pretrained={not args.no_pretrained}, "
-          f"method={method}, tome_r={args.tome_r}, evit_k={args.evit_k})")
-    model = build_model(args.model, pretrained=not args.no_pretrained,
-                        tome_r=args.tome_r, evit_k=args.evit_k)
+          f"method={method}, tome_r={args.tome_r}, strength={args.tome_strength}, evit_k={args.evit_k})")
+    model = build_model(args.model, pretrained=not args.no_pretrained, tome_r=args.tome_r,
+                        tome_strength=args.tome_strength, evit_k=args.evit_k)
 
     flops = count_flops(model, (1, 3, args.img_size, args.img_size))
     params = count_params(model)

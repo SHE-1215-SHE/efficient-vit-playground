@@ -20,13 +20,22 @@ python tests/test_tome.py --pretrained
 python tests/test_evit.py --pretrained
 
 echo "================ 1. 速度对比 (batch=$BS) ================"
-for setting in "" "--tome-r 4" "--tome-r 8" "--tome-r 12" "--evit-k 148" "--evit-k 100" "--evit-k 52"; do
+# 固定预算 vs 熵引导自适应（本项目创新点），同总预算公平对比
+for setting in "" "--tome-r 4" "--tome-r 8" "--tome-r 12" \
+               "--tome-r 4 --tome-strength 0.7" \
+               "--tome-r 8 --tome-strength 0.7" \
+               "--tome-r 12 --tome-strength 0.7" \
+               "--evit-k 148" "--evit-k 100" "--evit-k 52"; do
     echo "--- $MODEL $setting ---"
     python scripts/eval_speed.py --model $MODEL --device $DEV --batch-size $BS --no-pretrained $setting
 done
 
 echo "================ 2. 精度对比 (ImageNet-V2) ================"
-for setting in "" "--tome-r 4" "--tome-r 8" "--tome-r 12" "--evit-k 148" "--evit-k 100" "--evit-k 52"; do
+for setting in "" "--tome-r 4" "--tome-r 8" "--tome-r 12" \
+               "--tome-r 4 --tome-strength 0.7" \
+               "--tome-r 8 --tome-strength 0.7" \
+               "--tome-r 12 --tome-strength 0.7" \
+               "--evit-k 148" "--evit-k 100" "--evit-k 52"; do
     echo "--- $MODEL $setting ---"
     python scripts/eval_accuracy.py --model $MODEL --data $DATA --batch-size 256 $setting
 done
