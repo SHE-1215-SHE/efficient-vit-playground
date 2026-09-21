@@ -12,7 +12,7 @@ export HF_ENDPOINT=https://hf-mirror.com
 
 DEV=cuda
 BS=64
-DATA=data/imagenetv2-matched-frequency-format-val
+DATA=data/imagenet_val   # 官方ImageNet val(prepare_imagenet_val.py整理); 备用: data/imagenetv2-matched-frequency-format-val
 MODEL=deit3_small
 
 echo "================ 0. 正确性自检 ================"
