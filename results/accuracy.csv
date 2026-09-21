@@ -1,3 +1,12 @@
 date,model,dataset,n_samples,top1,top5,notes
 2026-09-21,deit3_small,imagenet_val(official),50000,81.38,95.46,链路验收通过 预期81~83
+2026-09-21,deit3_small+tome_r4,imagenet_val(official),50000,81.09,95.43,-0.29
+2026-09-21,deit3_small+tome_r8,imagenet_val(official),50000,80.52,95.13,-0.86
+2026-09-21,deit3_small+tome_r12,imagenet_val(official),50000,78.93,94.15,-2.45
+2026-09-21,deit3_small+adapt_r4_s0.7,imagenet_val(official),50000,81.35,95.42,-0.03 但实际删token数待确认
+2026-09-21,deit3_small+adapt_r8_s0.7,imagenet_val(official),50000,81.20,95.42,-0.18
+2026-09-21,deit3_small+adapt_r12_s0.7,imagenet_val(official),50000,81.14,95.36,-0.24
+2026-09-21,deit3_small+evit_k148,imagenet_val(official),50000,74.70,91.45,-6.68 硬丢弃无EViT融合机制
+2026-09-21,deit3_small+evit_k100,imagenet_val(official),50000,59.20,79.85,-22.18 灾难性掉点 同预算ToMe仅-0.86
+2026-09-21,deit3_small+evit_k52,imagenet_val(official),50000,35.55,57.13,-45.83
 2026-09-20,deit_small,ImageNet-V2 matched-frequency,10000,68.52,88.16,预期65-71内通过；曾因目录字典序bug得1.10%后修复
