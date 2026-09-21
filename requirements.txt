@@ -10,6 +10,7 @@ fvcore>=0.1.5.post20221221
 pillow>=10.0
 tqdm>=4.66
 pyyaml>=6.0
+matplotlib>=3.7
 
 # 第③阶段会用到的（现在装上也无妨）
 onnx>=1.16
