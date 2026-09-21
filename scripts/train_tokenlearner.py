@@ -49,6 +49,8 @@ def main():
     parser.add_argument("--classes", type=int, default=100, help="子集类别数")
     parser.add_argument("--per-class", type=int, default=500, help="每类图片数")
     parser.add_argument("--num-tokens", type=int, default=8, help="浓缩后token数L")
+    parser.add_argument("--resume", default="", help="从checkpoint续训, 如 --resume results/tokenlearner_last.pth")
+    parser.add_argument("--out", default="results/tokenlearner", help="checkpoint前缀, 生成 {前缀}_best.pth / _last.pth")
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -75,7 +77,6 @@ def main():
     trainable = list(model._tokenlearner.parameters()) + list(model.head.parameters())
     for p in trainable:
         p.requires_grad = True
-    print(f"可训练参数: {sum(p.numel() for p in trainable)} (骨干已冻结)")
 
     loader_train = DataLoader(train_set, batch_size=args.batch_size, shuffle=True,
                               num_workers=args.workers, pin_memory=True, drop_last=True)
@@ -85,9 +86,23 @@ def main():
     opt = torch.optim.AdamW(trainable, lr=args.lr, weight_decay=0.01)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
     loss_fn = nn.CrossEntropyLoss()
-    best = 0.0
+    best, start_epoch = 0.0, 0
 
-    for epoch in range(args.epochs):
+    # 断点续训: 恢复权重+优化器动量+调度进度+已完成的epoch
+    if args.resume:
+        ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
+        state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+        model.load_state_dict(state)
+        if isinstance(ckpt, dict) and "opt" in ckpt:      # 新格式完整checkpoint
+            opt.load_state_dict(ckpt["opt"])
+            ckpt["sched"] and sched.load_state_dict(ckpt["sched"])
+            start_epoch, best = ckpt.get("epoch", 0), ckpt.get("best", 0.0)
+            print(f"续训: 从epoch {start_epoch} 恢复, 历史最佳 {best:.2f}%")
+        else:
+            print("续训: 旧格式(仅权重)已加载, 优化器从头开始")
+    print(f"可训练参数: {sum(p.numel() for p in trainable)} (骨干已冻结)")
+
+    for epoch in range(start_epoch, args.epochs):
         model.train()
         t0, run_loss = time.time(), 0.0
         for images, targets in loader_train:
@@ -109,13 +124,17 @@ def main():
                 total += targets.size(0)
         acc = 100.0 * correct / total
         mark = ""
+        ckpt = {"model": model.state_dict(), "opt": opt.state_dict(),
+                "sched": sched.state_dict(), "epoch": epoch + 1, "best": best,
+                "args": vars(args)}
         if acc > best:
             best, mark = acc, "  <- best"
-            torch.save(model.state_dict(), "results/tokenlearner_best.pth")
+            torch.save(ckpt, f"{args.out}_best.pth")
+        torch.save(ckpt, f"{args.out}_last.pth")          # 每轮覆盖, 供断点续训
         print(f"epoch {epoch+1}: loss {run_loss/len(train_set):.4f} | "
               f"val acc {acc:.2f}%{mark} | {time.time()-t0:.0f}s")
 
-    print(f"\n完成, 最佳 val acc {best:.2f}%, 权重在 results/tokenlearner_best.pth")
+    print(f"\n完成, 最佳 val acc {best:.2f}%, 权重在 {args.out}_best.pth")
 
 
 if __name__ == "__main__":
