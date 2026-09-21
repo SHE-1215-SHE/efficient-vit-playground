@@ -1,6 +1,6 @@
 """吞吐量（images/s）与延迟（ms/img）测量。
 
-测量规范（面试会被问，必须严谨）：
+测量规范：
 1. 先 warmup 若干次，排除显存分配/cudnn自动调优等一次性开销
 2. GPU 用 cuda Event 计时（CPU 精度不够），CPU 回退到 perf_counter
 3. 每次迭代之间用 synchronize 保证异步 kernel 真正跑完

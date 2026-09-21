@@ -57,12 +57,14 @@ def main():
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--limit", type=int, default=0, help="只测前N个batch（0=全量，调试用）")
+    parser.add_argument("--tome-r", type=int, default=0,
+                        help=">0 时启用 ToMe（每层合并 r 个 token）；需配合 deit3/vit 权重")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"设备: {device}")
 
-    model = build_model(args.model, pretrained=True).to(device)
+    model = build_model(args.model, pretrained=True, tome_r=args.tome_r).to(device)
 
     # 预处理必须和 timm 模型训练时一致（resize尺寸/归一化均值方差），
     # 用错预处理是新手最常见的「精度莫名其妙低」的原因

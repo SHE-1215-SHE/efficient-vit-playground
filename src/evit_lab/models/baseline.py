@@ -16,6 +16,10 @@ TIMM_NAMES = {
     "deit_base": "deit_base_patch16_224",
     "vit_small": "vit_small_patch16_224",
     "vit_base": "vit_base_patch16_224",
+    # deit3: DeiT-III 权重，纯 cls token（无 dist token），给 ToMe 等会打乱
+    # token 顺序的方法用；架构与 deit 完全相同
+    "deit3_small": "deit3_small_patch16_224",
+    "deit3_base": "deit3_base_patch16_224",
 }
 
 
