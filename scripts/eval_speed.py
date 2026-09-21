@@ -29,25 +29,33 @@ def main():
     parser.add_argument("--no-pretrained", action="store_true", help="测速不需要权重，跳过下载")
     parser.add_argument("--tome-r", type=int, default=0,
                         help=">0 时启用 ToMe（每层合并掉 r 个 token），如 --tome-r 8")
+    parser.add_argument("--evit-k", type=int, default=0,
+                        help=">0 时启用 EViT（每层保留 k 个普通 token），如 --evit-k 100")
     args = parser.parse_args()
 
     if args.device == "cuda" and not torch.cuda.is_available():
         print("! 当前机器无 GPU，自动回退到 cpu（正式数据请在服务器上测）")
         args.device = "cpu"
 
-    print(f"加载模型: {args.model} (pretrained={not args.no_pretrained}, tome_r={args.tome_r})")
-    model = build_model(args.model, pretrained=not args.no_pretrained, tome_r=args.tome_r)
+    method = "tome" if args.tome_r > 0 else ("evit" if args.evit_k > 0 else "baseline")
+    print(f"加载模型: {args.model} (pretrained={not args.no_pretrained}, "
+          f"method={method}, tome_r={args.tome_r}, evit_k={args.evit_k})")
+    model = build_model(args.model, pretrained=not args.no_pretrained,
+                        tome_r=args.tome_r, evit_k=args.evit_k)
 
     flops = count_flops(model, (1, 3, args.img_size, args.img_size))
     params = count_params(model)
     print(f"参数量 : {params / 1e6:.2f} M")
+    n_layers = len(model.blocks)
     if args.tome_r > 0:
         # ToMe 逐层合并导致序列长度动态变化，fvcore 静态追踪算不出真实FLOPs，
         # 这里只打印名义值；加速能力请以实测吞吐为准
-        n_layers = len(model.blocks)
         print(f"FLOPs  : {flops / 1e9:.2f} G (名义值, 未反映动态合并)")
         print(f"ToMe   : 每层合并 {args.tome_r} 个 token, 共 {n_layers} 层, "
               f"197 -> {197 - n_layers * args.tome_r} 个")
+    elif args.evit_k > 0:
+        print(f"FLOPs  : {flops / 1e9:.2f} G (名义值, 未反映动态选择)")
+        print(f"EViT   : 每层保留 {args.evit_k} 个普通 token, 序列 197 -> {args.evit_k + 1}")
     else:
         print(f"FLOPs  : {flops / 1e9:.2f} G")
 
