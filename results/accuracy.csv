@@ -1,2 +1,3 @@
 date,model,dataset,n_samples,top1,top5,notes
+2026-09-21,deit3_small,imagenet_val(official),50000,81.38,95.46,链路验收通过 预期81~83
 2026-09-20,deit_small,ImageNet-V2 matched-frequency,10000,68.52,88.16,预期65-71内通过；曾因目录字典序bug得1.10%后修复
