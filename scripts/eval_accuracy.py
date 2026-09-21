@@ -22,6 +22,7 @@ import torch
 from torch.utils.data import DataLoader
 from timm.data import create_transform, resolve_model_data_config
 from torchvision.datasets import ImageFolder
+from tqdm import tqdm
 
 from evit_lab.models import build_model
 
@@ -35,7 +36,7 @@ def evaluate(model, loader, device):
     验证集则用 timm 内置的 wnid 映射表做转换。
     """
     correct1 = correct5 = total = 0
-    for images, targets in loader:
+    for images, targets in tqdm(loader, desc="评测中", ncols=80):
         images = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
         logits = model(images)
@@ -87,9 +88,9 @@ def main():
     loader = DataLoader(dataset, batch_size=args.batch_size,
                         shuffle=False, num_workers=args.workers, pin_memory=True)
 
+    print(f"模型 {args.model} | 样本数 {len(dataset)} | 开始评测(带进度条)...")
     top1, top5 = evaluate(model, loader, device)
 
-    print(f"模型 {args.model} | 样本数 {len(dataset)}")
     print(f"Top-1: {top1:.2f}%   Top-5: {top5:.2f}%")
 
 
