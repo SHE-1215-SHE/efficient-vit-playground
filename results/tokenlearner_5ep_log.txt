@@ -1,0 +1,13 @@
+﻿# TokenLearner PoC 训练日志 (2026-09-21)
+# 命令: python scripts/train_tokenlearner.py --data /newdisk/data/ImageNet/train_all --epochs 5
+# 注意: 100类子集(45000/5000), 精度不可与ImageNet-1000的81.38%直接对比
+设备: cuda
+训练/验证: 45000/5000 (100类)
+可训练参数: 388080 (骨干已冻结)
+epoch 1: loss 1.0427 | val acc 81.46%  <- best | 454s
+epoch 2: loss 0.8380 | val acc 83.06%  <- best | 197s
+epoch 3: loss 0.8103 | val acc 83.12%  <- best | 235s
+epoch 4: loss 0.7759 | val acc 83.76%  <- best | 189s
+epoch 5: loss 0.7665 | val acc 84.08%  <- best | 173s
+
+完成, 最佳 val acc 84.08%, 权重在 results/tokenlearner_best.pth

@@ -1,18 +1,8 @@
-"""TokenLearner (Ryoo et al., NeurIPS 2021) 最小可运行集成（PoC）。
+"""TokenLearner: 可学习软路由的 token 浓缩。
 
-核心思想：与"筛选/合并已有 token"不同，TokenLearner 用一个可学习的软路由
-把 N 个 patch token **浓缩**成 L 个（如 8 个）自适应 token：
-    w = softmax(MLP(X), dim=tokens)        # (B, N, L) 每个token对每个槽位的权重
-    Z_l = sum_i w[i,l] * X_i               # 加权汇聚 -> (B, L, C)
-即每个新 token 是全体 patch 的可学习加权组合（注意力池化的特例，
-但权重由 token 内容经 MLP 产生而非 QK 相似度）。
-
-架构切法（论文做法）：前一半 block 正常自注意力 -> TokenLearner 浓缩 197->L
--> 后一半 block 在 L+1 个 token 上继续（cls 保留在第0位不参与浓缩）。
-
-PoC 定位说明：TokenLearner 的路由参数必须训练，官方无 PyTorch 权重。
-本实现用于小数据（ImageNet-V2 划分出的子集）微调验证"token 浓缩"思想，
-不追求 SOTA；训练脚本 scripts/train_tokenlearner.py。
+用线性路由把 N 个 patch token 压缩为 L 个(L<<N)自适应 token: 每个输出 token
+是全体 patch 的凸组合，组合权重由 patch 内容经 softmax 归一化得到。
+与 ToMe/EViT 的训练免费不同，路由参数需要训练(本项目仅作 PoC)。
 """
 
 import types
@@ -23,28 +13,32 @@ import torch.nn as nn
 
 
 class TokenLearner(nn.Module):
-    """把 (B, N, C) 的 patch token 浓缩成 (B, L, C)。
+    """N -> L 软浓缩模块。
 
-    参数量只有 C*L + L（一个小线性层），训练的就是这个路由。
+    forward 数学: w = softmax_N(W_r x) ∈ (B, N, L)，在 token 维归一化；
+                  out_l = Σ_n w_{n,l} x_n，即 einsum("bnl,bnc->blc") -> (B, L, C)。
+
+    NOTE: softmax 作用在 token 维 N 而非槽位维 L —— 语义是「每个槽位在全体
+    patch 上做权重和为 1 的分配」，输出数值尺度不随 N 变化。
     """
 
     def __init__(self, dim: int, num_tokens: int = 8):
         super().__init__()
         self.num_tokens = num_tokens
-        self.router = nn.Linear(dim, num_tokens)  # token内容 -> 各槽位权重
+        self.router = nn.Linear(dim, num_tokens)  # patch 内容 -> L 个槽位的分配 logits
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B, N, C)
-        w = self.router(x)                        # (B, N, L)
-        w = torch.softmax(w, dim=1)               # 对 token 维归一化 = 软分配
+        w = self.router(x)  # (B, N, L)
+        w = torch.softmax(w, dim=1)  # 在 token 维归一化 = 各槽位对全体 patch 的凸组合系数
         return torch.einsum("bnl,bnc->blc", w, x)  # (B, L, C) 加权汇聚
 
 
 def _make_condense_forward(condense: TokenLearner):
-    """生成一个 block forward：先正常注意力，再在 MLP 前做浓缩。
+    """生成替换 block 前向的闭包: 完整执行该层 attn+MLP 后，在块尾浓缩。
 
-    浓缩放在 block 内（attention后/MLP前），这样该 block 的 MLP 只处理
-    L+1 个 token，立刻开始省算力。
+    NOTE: 浓缩置于块尾，本层计算量不省，省的是其后所有层的 attention/MLP；
+    CLS 不参与浓缩并保持在位置 0，输出 (B, 1+L, C)。
     """
 
     def forward(self, x: torch.Tensor, attn_mask=None, is_causal=False):
@@ -53,8 +47,8 @@ def _make_condense_forward(condense: TokenLearner):
         x = x + self.drop_path1(self.ls1(attn_out))
         x = x + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
 
-        cls, patches = x[:, :1], x[:, 1:]
-        patches = condense(patches)
+        cls, patches = x[:, :1], x[:, 1:]  # CLS 单独摘出，不参与浓缩
+        patches = condense(patches)  # (B, N-1, C) -> (B, L, C)
         return torch.cat([cls, patches], dim=1)
 
     return forward
@@ -62,23 +56,26 @@ def _make_condense_forward(condense: TokenLearner):
 
 def apply_tokenlearner(model: torch.nn.Module, num_tokens: int = 8,
                        split_at: int = 6) -> torch.nn.Module:
-    """把 TokenLearner 插到第 split_at 层 block 的 MLP 之前。
+    """在第 split_at 个 block(1-based) 的块尾接入 TokenLearner 浓缩。
 
     Args:
-        model: timm ViT
-        num_tokens: 浓缩后保留的 token 数 L（论文用 8）
-        split_at: 在第几层做浓缩（12层模型取 6 = 中点，前半理解后半汇总）
+        num_tokens: 浓缩后的槽位数 L
+        split_at: 浓缩位置；该 block 自身计算不省，其后所有层在长度 1+L 的
+            序列上运行
+    Side effects:
+        引入可训练参数(TokenLearner.router)，经 tokenlearner_params() 收集
+        后注册进优化器训练
     """
     blocks = list(model.blocks)
     assert 0 < split_at < len(blocks), f"split_at 应在 1~{len(blocks)-1}"
-    condense = TokenLearner(blocks[0].attn.qkv.out_features // 3, num_tokens)
+    condense = TokenLearner(blocks[0].attn.qkv.out_features // 3, num_tokens)  # qkv 输出为 3C，除 3 还原嵌入维 C
     forward = _make_condense_forward(condense)
     blocks[split_at - 1].forward = types.MethodType(forward, blocks[split_at - 1])
-    model._tokenlearner = condense
+    model._tokenlearner = condense  # 模块引用挂在 model 上，供 tokenlearner_params 与训练脚本访问
     model._tl_split_at = split_at
     return model
 
 
 def tokenlearner_params(model: torch.nn.Module):
-    """返回需要训练的参数（路由 + 后半段norm/head可按需加入）。"""
+    """返回新增路由参数(唯一需要训练的部分)，供优化器单独注册。"""
     return list(model._tokenlearner.parameters())

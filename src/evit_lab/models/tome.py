@@ -1,26 +1,15 @@
-"""ToMe (Token Merging, Bolya et al., ICLR 2023) 训练免费的 token 合并。
+"""ToMe (Token Merging) 与熵引导调度 —— 项目核心创新点。
 
-核心思想：ViT 每层前向后、MLP 前，把相似的 token 两两合并（取均值），
-每层固定减少 r 个 token，全程不需要训练。
+基础 ToMe: 每个 block 在 attention 之后、MLP 之前，将相似 token 两两合并
+(取均值)，每层减少 r 个 token，训练免费。
 
-数学逻辑（双向软匹配 bipartite soft matching）:
-    1. 把 N 个 token 按奇偶位分成集合 A(偶数位)、B(奇数位)，各约 N/2 个
-    2. 用注意力的 K 投影作为 token 表征：metric = K(x)
-       余弦相似度矩阵 S = cos(a_i, b_j)，即 L2 归一化后的 a @ b^T
-    3. 对每个 a_i 取最相似的 b_j：edge(i) = argmax_j S[i, j]
-    4. 只保留相似度最高的 r 条边，其余 A 中 token 原样保留
-    5. 被选中的 r 个 a_i 与其目标 b_j 按元素取均值（scatter_reduce mean）
-
-CLS token 处于偶数位（位置0），把它的相似度置为 -inf 保证永不被合并，
-且合并输出时保留 token 按原始顺序排，CLS 始终在序列第 0 位（分类头依赖）。
-
-设计说明：这里不依赖官方 tome 库（其魔改的 timm 版本与我们服务器上的
-timm 1.x 冲突），只借用论文算法，在 timm 1.x 的 Block.forward 上挂钩。
-注意：合并后 token 顺序会变，但 ViT 自注意力对顺序不敏感（位置信息已在
-词向量里），对 deit3/vit 这类只有 cls 的模型是安全的；deit 原版权重带
-dist token，合并会打乱其位置，因此 ToMe 实验统一用 deit3 权重。
+本项目扩展 —— 熵引导调度: 用第 3 个 block(index 2) 的 CLS 注意力归一化熵
+做一次性决策，从「前重 / 后重」两套逐层倍率模板中选一套，换算成逐层删除数
+后广播给后续所有层；决策之后的层纯查表，不再产生新的 GPU->CPU 同步。
+见 _cls_entropy / _decide_schedule / _schedule_rs。
 """
 
+import math
 import types
 from types import SimpleNamespace
 
@@ -30,60 +19,64 @@ import torch.nn.functional as F
 
 def bipartite_merge(x: torch.Tensor, metric: torch.Tensor, r: int,
                     protect_cls: bool = True):
-    """执行一步双向软匹配合并。
+    """二分图软匹配合并 (ToMe BSM 简化实现)。
+
+    将 token 按下标奇偶划分成两组(组内不配对、组间全连接): 每个偶位 token
+    取其在奇位组中的余弦最近邻作为候选配对，按配对相似度从高到低执行 r 次
+    合并，其余偶位 token 原样保留。
 
     Args:
-        x: (B, N, C) 当前 token 序列
-        metric: (B, N, C) 用于算相似度的表征（K 投影）
-        r: 本层要删除的 token 数
-        protect_cls: 保护位置0的 cls token 不被合并
+        x: (B, N, C) token 序列，index 0 为 CLS
+        metric: (B, N, C) 相似度度量，与 x 逐 token 对应；内部 L2 归一化，
+            点积即余弦相似度
+        r: 目标合并数；实际合并数 r' = min(r, N//2 - protect_cls) 可能小于 r
+        protect_cls: True 时 CLS 永不作为合并源，保持序列首位
+
     Returns:
-        (合并后的 (B, N-r, C), 实际合并数 r)
+        (merged_x, r')：merged_x (B, N-r', C)，排列为 [未合并偶位 token(保序),
+        奇位 token(含被合并更新)] —— 非保序重排，下游不得依赖原始位置序；
+        r' 为实际合并数。
+
+    数学: sim = cos(a_i, b_j)；被选中配对的 dst_j <- mean(指派到 j 的全部 src)
     """
     B, N, C = x.shape
     if r <= 0 or N <= 2:
         return x, 0
 
     with torch.no_grad():
-        metric = F.normalize(metric, dim=-1)          # L2归一化 -> 内积=余弦相似度
-        a_m, b_m = metric[:, ::2], metric[:, 1::2]    # A=偶数位, B=奇数位
-        scores = a_m @ b_m.transpose(1, 2)            # (B, nA, nB) 余弦相似度矩阵
+        # 相似度矩阵与索引选择不建图: 索引不可导，且 (B, N/2, N/2) 中间量无需保留梯度
+        metric = F.normalize(metric, dim=-1)  # 单位化后点积 = 余弦相似度
+        a_m, b_m = metric[:, ::2], metric[:, 1::2]  # 奇偶二分，构成二分图
+        scores = a_m @ b_m.transpose(1, 2)  # (B, N/2, N/2) 组间余弦相似度
 
         if protect_cls:
-            scores[:, 0, :] = float("-inf")           # cls 所在行永不被选中
-
-        # 每个A token 找它最相似的 B token
-        node_max, node_idx = scores.max(dim=-1)       # (B, nA)
-        order = node_max.argsort(dim=-1, descending=True)
-        r = min(r, order.shape[1] - (1 if protect_cls else 0))
+            scores[:, 0, :] = float("-inf")  # INVARIANT: CLS(index 0) 候选全屏蔽，必落入未合并集合
+        node_max, node_idx = scores.max(dim=-1)  # 各偶位 token 的最佳配对相似度与对手下标
+        order = node_max.argsort(dim=-1, descending=True)  # 按相似度降序 = 最确信的配对先合并
+        r = min(r, order.shape[1] - (1 if protect_cls else 0))  # 保护 CLS 时上限为 |A|-1
         if r <= 0:
             return x, 0
 
-        src_idx = order[..., :r, None]                # (B, r, 1)   要合并掉的A
-        # 保留的A按原始顺序排（保证cls仍是最前面的那个），这是分类头正确的前提
-        unm_idx = order[..., r:, None].sort(dim=-2).values
-        dst_idx = node_idx.gather(-1, src_idx.squeeze(-1)).unsqueeze(-1)  # (B, r, 1)
+        src_idx = order[..., :r, None]  # (B, r, 1) 待合并的源(偶位)
+        unm_idx = order[..., r:, None].sort(dim=-2).values  # 未合并源按原下标升序，保持相对顺序
+        dst_idx = node_idx.gather(-1, src_idx.squeeze(-1)).unsqueeze(-1)  # (B, r, 1) 各源的目标(奇位)
 
     src, dst = x[:, ::2], x[:, 1::2]
-    unm = src.gather(1, unm_idx.expand(-1, -1, C))    # 保留的token
-    src_sel = src.gather(1, src_idx.expand(-1, -1, C))
-    # 被选中的 src 并入各自的目标 dst（按元素均值）
+    unm = src.gather(1, unm_idx.expand(-1, -1, C))  # 未合并源，已按原序排列
+    src_sel = src.gather(1, src_idx.expand(-1, -1, C))  # (B, r, C) 被合并的源
     dst = dst.scatter_reduce(1, dst_idx.expand(-1, -1, C), src_sel,
-                             reduce="mean", include_self=False)
-    out = torch.cat([unm, dst], dim=1)                # (B, N-r, C)
+                             reduce="mean", include_self=False)  # dst <- 指派源的均值(不含 dst 原值)
+    out = torch.cat([unm, dst], dim=1)  # [未合并偶位(保序) | 奇位组]，总长 N - r'
     return out, r
 
 
 def _tome_block_forward(self, x: torch.Tensor, attn_mask=None, is_causal=False):
-    """替换 timm Block.forward：attention -> 合并 -> MLP。
+    """被替换进 timm ViT block 的前向: 在 attention 与 MLP 之间插入合并。
 
-    性能关键点: 整层只算一次 qkv（block 内部 attention 自带的那次），
-    通过 hook 存到 cfg._qkv，metric(取K段)和熵(取Q,K段)直接切片复用，
-    不再重复投影 —— 修复自适应模式 qkv 三重计算导致的 -40% 速度回退。
-
-    自适应模式（strength>0）下，用 CLS 行注意力的归一化熵缩放本层合并数:
-    熵低（CLS已聚焦）多删, 熵高（混乱/难图）少删;
-    r_t = r_base * (1 + strength * (1 - 2*H_norm)), strength=0 退化为原版 ToMe。
+    数据流: x (B, N, C) -> attn + 残差 -> 合并 (N -> N-r_t) -> MLP + 残差
+    -> (B, N-r_t, C)。
+    合并位置的选择: attention 之后 token 间信息已完成交换，此时合并的信息
+    损失最小；MLP 逐 token 作用，合并后直接省去其计算量。
     """
     cfg = self._tome_cfg
     norm_x = self.norm1(x)
@@ -91,69 +84,163 @@ def _tome_block_forward(self, x: torch.Tensor, attn_mask=None, is_causal=False):
     x = x + self.drop_path1(self.ls1(attn_out))
 
     if cfg.r > 0 and x.shape[1] > cfg.min_tokens:
-        qkv = getattr(cfg, "_qkv", None)          # (B, N, 3C) hook存好
-        if qkv is None:                            # 兜底: hook未触发时显式算一次
+        # 正常路径下 qkv hook 已缓存本层 attention 内部的 qkv，免于重算
+        # (重算会使 qkv 线性层开销近乎翻倍)；仅 hook 未触发时兜底重算
+        qkv = getattr(cfg, "_qkv", None)
+        if qkv is None:
             qkv = self.attn.qkv(norm_x)
         C = qkv.shape[-1] // 3
-        metric = qkv[..., C:2 * C]                 # K段即metric, 切片零开销
-        if cfg.strength > 0:
-            r_t = _adaptive_r_from_qkv(qkv, self.attn, cfg)
+        metric = qkv[..., C:2 * C]  # 取 K 作相似度度量(ToMe 消融: K 优于输入 X 与注意力输出)
+        if cfg.strength > 0 and not cfg.decided and cfg.later is not None:  # 仅 index 2 决策: 0/1 层 later 为 None 直接跳过, 全模型恰 1 次 GPU->CPU 同步
+            _decide_schedule(self, qkv)
+        r_t = cfg.plan[0]  # 查表得本层删除数(固定预算下恒为基准 r)
+        if getattr(cfg, "matcher", "bipartite") == "mutual":
+            from .mutual_pair import mutual_pair_merge
+            x, merged, n_pairs = mutual_pair_merge(x, metric, r_t, protect_cls=True,
+                                                   min_tokens=cfg.min_tokens,
+                                                   budget=getattr(cfg, "budget", True))
+            cfg.info.setdefault("pairs", []).append(n_pairs)
         else:
-            r_t = cfg.r
-        x, merged = bipartite_merge(x, metric, r_t, protect_cls=True)
+            x, merged = bipartite_merge(x, metric, r_t, protect_cls=True)
         cfg.info["r"].append(merged)
-    cfg._qkv = None                                # 释放引用
+    cfg._qkv = None  # 用毕即清: 防止缓存的大张量滞留显存，也杜绝后续误用过期度量
 
     x = x + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
     return x
 
+# 逐层删除数模板: 相对基准 r 的倍率。FRONT 前重后轻(浅层激进合并)，BACK 为其逆序。
+# 长度 10 = 12 层骨干 - 前两层(固定 r): 自 index 2 起逐层生效
+_SCHED_FRONT = (1.7, 1.6, 1.5, 1.4, 1.2, 1.0, 0.7, 0.4, 0.3, 0.2)
+_SCHED_BACK = tuple(reversed(_SCHED_FRONT))
 
-def _adaptive_r_from_qkv(qkv: torch.Tensor, attn: torch.nn.Module, cfg) -> int:
-    """从已算好的 qkv 计算 CLS 行归一化熵, 决定本层合并数（batch 均值）。
 
-    熵的直觉: CLS 对各 token 的注意力越均匀(熵高)说明模型还没分清主次,
-    此时少删; 越尖锐(熵低)说明关键 token 已明确, 其余冗余度高, 多删。
+def _cls_entropy(qkv: torch.Tensor, attn: torch.nn.Module) -> torch.Tensor:
+    """CLS 注意力分布的归一化熵(对 batch 取均值，返回标量 tensor)。
+
+    数学: p = mean_h softmax(q_cls K^T / sqrt(d))  (B, N)，去掉 CLS 自身项后重归一
+          H = -(Σ_j p_j log p_j) / log(N-1) ∈ [0, 1]
+
+    H 低 <=> CLS 注意力集中于少数 token(前景判别明确)；
+    H 高 <=> 接近均匀分布(语义尚未收敛)。
+
+    Args:
+        qkv: (B, N, 3C) 本层 qkv 投影(hook 缓存，复用避免重算)
+        attn: 本层 attention 模块，提供 num_heads 与 scale
+
+    NOTE: 调用方对返回值 .item() 会触发 GPU->CPU 同步；该代价只发生在未
+    decided 的层上(见 _decide_schedule)。
     """
     B, N, C3 = qkv.shape
     C = C3 // 3
     H, d = attn.num_heads, C // attn.num_heads
     qkv3 = qkv.reshape(B, N, 3, H, d).permute(2, 0, 3, 1, 4)
     q, k = qkv3[0], qkv3[1]
-    # CLS 行注意力概率 (B, N): 只算一行, 开销可忽略
-    cls_row = (q[:, :, 0:1] @ k.transpose(-1, -2)) * attn.scale
-    p = cls_row.softmax(dim=-1).squeeze(2).mean(dim=1)        # (B, N)
-    p = p[:, 1:]                                              # 去掉cls自身
-    p = p / p.sum(dim=-1, keepdim=True).clamp_min(1e-9)
-    h = -(p * (p + 1e-9).log()).sum(-1)                       # (B,) 熵
-    h_norm = (h / torch.log(torch.tensor(float(p.shape[-1]), device=h.device))).mean()
-    f = 1.0 + cfg.strength * (1.0 - 2.0 * h_norm.item())
-    return max(1, round(cfg.r * f))
+    cls_row = (q[:, :, 0:1] @ k.transpose(-1, -2)) * attn.scale  # (B, H, 1, N) CLS 行注意力 logits
+    p = cls_row.softmax(dim=-1).squeeze(2).mean(dim=1)  # softmax 后跨头平均 -> (B, N)
+    p = p[:, 1:]  # 去掉 CLS 对自身的注意力项，否则该项会系统性压低熵的区分度
+    p = p / p.sum(dim=-1, keepdim=True).clamp_min(1e-9)  # 重归一化，补回被移除的质量
+    h = -(p * (p + 1e-9).log()).sum(-1)  # (B,) 熵(自然对数)
+    return (h / math.log(p.shape[-1])).mean()  # 除以 log(N-1) 归一化到 [0,1]，使跨层/跨序列长度的熵可比
+
+
+def _schedule_rs(template, base_r: int, strength: float) -> list:
+    """把逐层倍率模板换算为整数删除数序列。
+
+    数学: blended_i = 1 + strength*(s_i - 1)  (strength=0 退化为每层固定 base_r)
+          rs_i = round(Σ_{j<=i} blended_j*base_r) - round(Σ_{j<i} blended_j*base_r)
+
+    采用「累计和取整后作差」而非逐层独立取整: 保证 Σ rs_i == round(Σ blended_i*base_r)，
+    总删除量不因舍入而漂移；cum_f 单调不减，其取整序列亦不减，故 rs_i >= 0。
+
+    Returns:
+        list[int]，长度与 template 一致，为逐层删除数
+    """
+    blended = [1.0 + strength * (s - 1.0) for s in template]
+    rs, prev_cum, cum_f = [], 0.0, 0.0
+    for f in blended:
+        cum_f += f * base_r
+        rs.append(int(round(cum_f)) - int(round(prev_cum)))
+        prev_cum = cum_f
+    return rs
+
+
+def _decide_schedule(blk, qkv: torch.Tensor):
+    """熵引导调度的一次性决策: 计算熵 -> 选模板 -> 生成逐层 r 并向下广播。
+
+    设计动机:
+    - 决策点固定在 block index 2: 更早的层注意力尚未形成语义，熵判别力不足；
+      决策越早，受调度覆盖的层越多。
+    - 决策一次、后续层纯查表: 决策后所有层只读 cfg.plan，无额外同步开销。
+    - 调用约束: 仅 index 2 (later 非空) 会进入本函数；index 0/1 的 cfg.later
+      为 None，在调用方即被跳过，保证全模型恰 1 次 GPU->CPU 同步。
+
+    副作用: 写入 later 各 cfg 的 plan/decided；在 model_ref._tome_schedule
+    记录 {"entropy", "name", "rs"} 供事后分析。
+    """
+    cfg = blk._tome_cfg
+    if cfg.force:
+        h, name = None, cfg.force  # 指定模板: 跳过熵计算，无 GPU 同步
+    else:
+        # .item() 触发 GPU->CPU 同步；调用方已保证仅 index 2 进入本函数，
+        # 故无 force 时全模型唯一次同步发生在这里
+        h = _cls_entropy(qkv, blk.attn).item()
+        name = "front" if h < 0.5 else "back"
+    template = _SCHED_FRONT if name == "front" else _SCHED_BACK
+    rs = _schedule_rs(template, cfg.r, cfg.strength)
+    if cfg.later is not None:
+        for c, rr in zip(cfg.later, rs):
+            c.plan = [rr]
+            c.decided = True  # 锁定后继层: 不再进入决策分支，纯查表
+        cfg.model_ref._tome_schedule = {"entropy": h, "name": name, "rs": rs}
 
 
 def apply_tome(model: torch.nn.Module, r: int, min_tokens: int = 8,
-               strength: float = 0.0) -> torch.nn.Module:
-    """给一个 timm VisionTransformer 挂上 ToMe 合并逻辑。
+               strength: float = 0.0, force_schedule: str = None,
+               matcher: str = "bipartite", budget: bool = True) -> torch.nn.Module:
+    """给 timm ViT 打 ToMe 补丁: 逐 block 替换前向并挂 qkv 缓存 hook。
+
+    机制:
+    - 每个 block 一份 cfg(SimpleNamespace) 记录本层计划与统计；index 2 的
+      cfg.later 指向其后全部 cfg，是熵调度的广播入口。
+    - qkv forward hook 缓存 attention 内部已算出的 qkv (B, N, 3C)，复用其 K
+      作为度量，避免 metric 重算令 qkv 线性层开销近乎翻倍。
+    - 实例级 monkey-patch(blk.forward)，不修改 timm 类定义。
+    - model._tome_r/_tome_strength/_tome_matcher/_tome_schedule 供评测脚本读取。
 
     Args:
-        model: timm 创建的 ViT（要求每个 block 有 norm1/attn/mlp 标准结构）
-        r: 每层基准删除 token 数；12层模型 r=8 时共删 96 个（197 -> 101）
-        min_tokens: 序列短于该值后停止合并，防止把 token 合没了
-        strength: 自适应强度 (0~1)。0=固定r(原版ToMe)；>0 时每层按注意力熵
-                  缩放 r（本项目创新点：熵引导的逐层自适应预算）
+        r: 每层基准删除数
+        min_tokens: 序列长度低于该值时本层跳过合并
+        strength: 0=固定预算(每层 r)；>0 启用熵引导调度，值为模板插值强度
+        force_schedule: "front"/"back"，指定时跳过熵决策(用于消融)
+        matcher: "bipartite"(BSM) 或 "mutual"(互最近邻配对)
+        budget: 传入 mutual 匹配器的预算开关；bipartite 恒为固定预算
     """
-    for blk in model.blocks:
-        cfg = SimpleNamespace(r=r, min_tokens=min_tokens,
-                              strength=strength, info={"r": []}, _qkv=None)
+    blocks = list(model.blocks)
+    cfgs = [SimpleNamespace(r=r, min_tokens=min_tokens, strength=strength,
+                            info={"r": []}, _qkv=None,
+                            plan=[r],  # 默认计划: 每层固定删 r；熵调度生效后按层覆写
+                            decided=False,
+                            later=None, model_ref=model, force=force_schedule,
+                            matcher=matcher, budget=budget)
+            for _ in blocks]
+    if len(blocks) > 2:
+        cfgs[2].later = cfgs[2:]  # 广播链: index 2 决策后覆写自身及全部后继的 plan
+    for blk, cfg in zip(blocks, cfgs):
         blk._tome_cfg = cfg
         blk.forward = types.MethodType(_tome_block_forward, blk)
         blk._tome_hook = blk.attn.qkv.register_forward_hook(
-            lambda m, i, o, _cfg=cfg: setattr(_cfg, "_qkv", o))
+            lambda m, i, o, _cfg=cfg: setattr(_cfg, "_qkv", o))  # 以默认参数绑定各自 cfg，规避循环变量晚绑定
     model._tome_r = r
     model._tome_strength = strength
+    model._tome_matcher = matcher
+    model._tome_schedule = None  # 熵调度结果由 _decide_schedule 在首次前向时写入
     return model
 
 
 def tome_token_counts(model: torch.nn.Module) -> list:
-    """返回最近一次前向中每层实际合并的 token 数（验证/记录用）。"""
+    """各 block 最近一次前向实际删除的 token 数。
+
+    NOTE: cfg.info["r"] 跨前向累积追加，此处取末位即最近一次；未合并的层计 0。
+    """
     return [sum(blk._tome_cfg.info["r"]) and blk._tome_cfg.info["r"][-1]
             if blk._tome_cfg.info["r"] else 0 for blk in model.blocks]

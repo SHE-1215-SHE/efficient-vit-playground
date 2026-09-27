@@ -1,0 +1,20 @@
+设备: cuda
+训练/验证: 45000/5000 (100类)
+模式: TokenLearner L=8 | 可训练参数: 388080 (骨干已冻结)
+epoch 1: loss 1.0398 | val acc 81.96%  <- best | 282s
+epoch 2: loss 0.8560 | val acc 81.72% | 179s
+epoch 3: loss 0.8233 | val acc 82.42%  <- best | 210s
+epoch 4: loss 0.8168 | val acc 83.02%  <- best | 171s
+epoch 5: loss 0.7972 | val acc 83.44%  <- best | 199s
+epoch 6: loss 0.7931 | val acc 83.48%  <- best | 205s
+epoch 7: loss 0.7706 | val acc 83.32% | 211s
+epoch 8: loss 0.7701 | val acc 83.50%  <- best | 305s
+epoch 9: loss 0.7594 | val acc 83.62%  <- best | 205s
+epoch 10: loss 0.7435 | val acc 84.08%  <- best | 202s
+epoch 11: loss 0.7417 | val acc 84.28%  <- best | 330s
+epoch 12: loss 0.7318 | val acc 84.64%  <- best | 322s
+epoch 13: loss 0.7281 | val acc 84.44% | 197s
+epoch 14: loss 0.7251 | val acc 84.76%  <- best | 173s
+epoch 15: loss 0.7314 | val acc 84.76% | 204s
+
+完成, 最佳 val acc 84.76%, 权重在 results/tokenlearner_best.pth

@@ -1,0 +1,6 @@
+加载模型: deit3_small (pretrained=False, method=baseline, tome_r=0, strength=0.0, evit_k=0)
+参数量 : 22.06 M
+FLOPs  : 4.25 G
+设备   : cuda  batch=64
+延迟   : 0.36 ms/img
+吞吐量 : 2812.7 img/s

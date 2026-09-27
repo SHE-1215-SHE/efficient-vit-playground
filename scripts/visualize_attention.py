@@ -1,19 +1,18 @@
-"""注意力热力图可视化：看 CLS 到底在看图里哪里。
+"""注意力热力图可视化：定位 CLS token 在输入图像上的关注区域。
 
+输入: 单张图片（--image；留空则生成合成测试图）与模型别名。
+输出: results/attention_<model>.png，三联图（原图 | Attention Rollout | 最后一层）。
 两种视角:
     1. last-layer: 最后一层 CLS 对各 patch 的注意力（最直接）
-    2. rollout:    Attention Rollout (Abnar & Zuidema 2020)，逐层连乘
-       (A+I)/2，考虑了残差连接的信息流通，通常比单层更接近真实归因
-
-实现方式: 在每个 block 的 qkv Linear 上挂 forward hook，从输出手工重算
-注意力矩阵（不侵入模型 forward，基线/剪枝模型通用）。
-注意: 热力图与空间位置一一对应，只在**基线模型**上做（ToMe/EViT 会打乱
-patch 位置，网格对应关系失效——这本身也是个值得讲的点）。
-
-用法:
+    2. rollout:    Attention Rollout (Abnar & Zuidema 2020)，逐层连乘 (A+I)/2，
+       考虑残差连接的信息流通，通常比单层归因更接近真实关注区域
+实现方式: 在每个 block 的 qkv Linear 上挂 forward hook，从输出重算注意力矩阵，
+      不侵入模型 forward，基线/剪枝模型通用。
+NOTE: 热力图与 patch 空间网格一一对应，仅在基线模型上绘制；ToMe 合并 / EViT
+      剪枝会改变 token 与 patch 位置的对应关系，网格映射随之失效。
+典型用法:
     python scripts/visualize_attention.py --image my.jpg
     python scripts/visualize_attention.py                # 无图则生成合成测试图
-输出: results/attention_<model>.png (原图 | rollout | 最后一层 三联图)
 """
 
 import argparse
@@ -29,11 +28,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from PIL import Image
 from evit_lab.models import build_model
 
-GRID = 14  # 224/16 patch 网格
+GRID = 14  # 224/16 = 14，即 patch 网格边长
 
 
 def _synthetic_image() -> Image.Image:
-    """生成合成测试图: 红色方块(高对比前景) + 噪声背景, 用于开箱验证。"""
+    """生成合成测试图：高对比红色方块前景 + 噪声背景，用于无图片输入时的功能验证。"""
     rng = np.random.default_rng(0)
     arr = rng.integers(60, 100, (224, 224, 3), dtype=np.uint8)
     arr[70:150, 80:160] = [220, 40, 40]  # 前景红块
@@ -125,7 +124,7 @@ def main():
     fig.savefig(out_path, dpi=120)
     print(f"已保存: {out_path}")
 
-    # 数值 sanity: 合成图中红块位于 patch 网格 [4:9, 5:10], 检查注意力对比度
+    # 数值自检: 合成图红块覆盖 patch 网格 [4:9, 5:10]，前景/背景注意力对比度应 > 1
     patch_attn = roll[1:].reshape(GRID, GRID)
     fg = patch_attn[4:9, 5:10].mean().item()
     bg = patch_attn.median().item()

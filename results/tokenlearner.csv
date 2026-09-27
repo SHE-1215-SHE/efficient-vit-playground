@@ -1,0 +1,3 @@
+model,mode,patch_tokens,params_trainable,epochs,val_acc_100cls,delta_vs_baseline,note
+deit3_small,frozen backbone + head only (197 tokens),197,385000,15,92.30,0.00,参照基线
+deit3_small,frozen backbone + TokenLearner L=8 + head,8,388080,15,84.76,-7.54,约25x token压缩

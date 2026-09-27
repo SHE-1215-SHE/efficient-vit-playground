@@ -1,0 +1,43 @@
+===== TokenLearner L=8 重训 2026年 09月 24日 星期四 12:03:34 CST =====
+设备: cuda
+训练/验证: 45000/5000 (100类)
+模式: TokenLearner L=8 | 可训练参数: 388080 (骨干已冻结)
+epoch 1: loss 1.0265 | val acc 82.34%  <- best | 466s
+epoch 2: loss 0.8314 | val acc 83.04%  <- besepoch 3: loss 0.8358 | val acc 82.46%  <- best | 184s
+epoch 4: epoch 4: loss 0.7994 | val acc 83.50%  <- beepoch 5: epoch 5: loss 0.7966 | val acc 83.20% | 80s
+epoch 6: loss 0.7749 | val acc 83.74%  <- beepoch 7: epoch 7: loss 0.7705 | val acc 84.1epoch 8: loss 0.78epoch 8: loss 0.7642 | val acc 84.60%  <- best | 78s
+epoch 9: loss 0.7503 | val acc 83.90% | 87s
+epoch 10: loss 0.7451 | val acc 83.56% | 84s
+epoch 11: loss 0.7391 | val acc 83.70% | 82s
+epoch 12: loss 0.7305 | val acc 83.66% | 86s
+epoch 13: loss 0.7184 | val acc 84.12% | 70s
+epoch 14: loss 0.7170 | val acc 83.86% | 70s
+epoch 15: loss 0.7191 | val acc 83.98% | 71s
+
+完成, 最佳 val acc 84.60%, 权重在 results_retest_20260924/tokenlearner_best.pth
+===== TokenLearner 基线(仅训头,197token) 重训 2026年 09月 24日 星期四 12:36:43 CST =====
+设备: cuda
+训练/验证: 45000/5000 (100类)
+模式: 基线(仅训头, 197 token) | 可训练参数: 385000 (骨干已冻结)
+epoch 1: loss 0.4413 | val acc 92.06%  <- best | 87s
+epoch 2: loss 0.4251 | val acc 91.80% | 83s
+epoch 3: loss 0.4108 | val acc 91.84% | 86s
+epoch 4: loss 0.4046 | val acc 91.60% | 86s
+epoch 5: loss 0.4002 | val acc 91.90% | 86s
+epoch 6: loss 0.3954 | val acc 91.78% | 86s
+epoch 7: loss 0.3895 | val acc 92.28%  <- best | 86s
+epoch 8: loss 0.3891 | val acc 92.10% | 86s
+epoch 9: loss 0.3828 | val acc 91.84% | 86s
+epoch 10: loss 0.3820 | val acc 92.32%  <- best | 74s
+epoch 11: loss 0.3692 | val acc 92.20% | 67s
+epoch 12: loss 0.3668 | val acc 92.40%  <- best | 64s
+epoch 13: loss 0.3634 | val acc 92.12% | 58s
+epoch 14: loss 0.3677 | val acc 92.32% | 57s
+epoch 15: loss 0.3639 | val acc 92.32% | 57s
+
+完成, 最佳 val acc 92.40%, 权重在 results_retest_20260924/tl_baseline_best.pth
+===== part2 完成 2026年 09月 24日 星期四 12:56:18 CST =====
+model,mode,best_val_acc_100cls
+deit3_small,frozen backbone + head only (197 tokens),92.40
+deit3_small,frozen backbone + TokenLearner L=8 + head,84.60
+enLearner L=8 + head,84.60

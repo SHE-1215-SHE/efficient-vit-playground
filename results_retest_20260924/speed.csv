@@ -1,0 +1,11 @@
+name,throughput_img_s,latency_ms_per_img
+baseline,2812.7,0.36
+tome_r4,2971.1,0.34
+tome_r8,3383.0,0.30
+tome_r12,3672.6,0.27
+adaptive_r4,2926.2,0.34
+adaptive_r8,3270.6,0.31
+adaptive_r12,3669.6,0.27
+evit_k148,3172.8,0.32
+evit_k100,3823.7,0.26
+evit_k52,4797.7,0.21

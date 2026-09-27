@@ -1,8 +1,11 @@
-"""测速脚本：统计 FLOPs / 参数量 / 延迟 / 吞吐量。
+"""测速脚本：统计 FLOPs / 参数量 / 单图延迟 / 吞吐量。
 
-用法（本机 CPU 冒烟）:
+输入: 模型别名及运行配置（设备、batch size、迭代次数）。
+输出: 终端打印参数量、名义 FLOPs、延迟 (ms/img) 与吞吐量 (img/s)。
+典型用法:
+    # 本机 CPU 冒烟
     python scripts/eval_speed.py --model deit_small --device cpu --batch-size 8 --iters 5
-用法（服务器 4090 正式测）:
+    # 服务器 4090 正式测量
     python scripts/eval_speed.py --model deit_small --device cuda --batch-size 64
 """
 
@@ -30,7 +33,11 @@ def main():
     parser.add_argument("--tome-r", type=int, default=0,
                         help=">0 时启用 ToMe（每层合并掉 r 个 token），如 --tome-r 8")
     parser.add_argument("--tome-strength", type=float, default=0.0,
-                        help="ToMe 自适应强度 0~1（0=固定预算；>0=熵引导逐层自适应）")
+                        help="ToMe 自适应强度 0~1（0=固定预算；>0=熵引导预算调度）")
+    parser.add_argument("--tome-force-schedule", default=None, choices=["front", "back"],
+                        help="消融用: 强制指定调度模板, 跳过熵决策")
+    parser.add_argument("--matcher", default="bipartite", choices=["bipartite", "mutual"],
+                        help="ToMe 合并的匹配算法: bipartite=原版二分匹配, mutual=MPM互最近邻(arXiv 2604.05718)")
     parser.add_argument("--evit-k", type=int, default=0,
                         help=">0 时启用 EViT（保留 k 个普通 token），如 --evit-k 100")
     parser.add_argument("--evit-start", type=int, default=4,
@@ -48,15 +55,17 @@ def main():
           f"method={method}, tome_r={args.tome_r}, strength={args.tome_strength}, evit_k={args.evit_k})")
     model = build_model(args.model, pretrained=not args.no_pretrained, tome_r=args.tome_r,
                         tome_strength=args.tome_strength, evit_k=args.evit_k,
-                        evit_start=args.evit_start)
+                        evit_start=args.evit_start,
+                        tome_force_schedule=args.tome_force_schedule,
+                        tome_matcher=args.matcher)
 
     flops = count_flops(model, (1, 3, args.img_size, args.img_size))
     params = count_params(model)
     print(f"参数量 : {params / 1e6:.2f} M")
     n_layers = len(model.blocks)
     if args.tome_r > 0:
-        # ToMe 逐层合并导致序列长度动态变化，fvcore 静态追踪算不出真实FLOPs，
-        # 这里只打印名义值；加速能力请以实测吞吐为准
+        # NOTE: ToMe 逐层合并使序列长度动态变化，fvcore 基于静态 shape 追踪，
+        # 无法反映合并后的真实计算量，此处仅为名义值；加速结论以实测吞吐为准
         print(f"FLOPs  : {flops / 1e9:.2f} G (名义值, 未反映动态合并)")
         print(f"ToMe   : 每层合并 {args.tome_r} 个 token, 共 {n_layers} 层, "
               f"197 -> {197 - n_layers * args.tome_r} 个")
@@ -66,6 +75,9 @@ def main():
     else:
         print(f"FLOPs  : {flops / 1e9:.2f} G")
 
+    # NOTE: 测速协议——不同方法对比时须保持 batch-size / warmup / iters 一致；
+    # measure_speed 用 CUDA Event 计时并取中位数，以排除异步 kernel 未完成与
+    # 偶发抖动带来的测量偏差
     speed = measure_speed(
         model,
         input_size=(3, args.img_size, args.img_size),

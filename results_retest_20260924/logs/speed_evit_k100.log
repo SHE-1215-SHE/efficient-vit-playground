@@ -1,0 +1,7 @@
+加载模型: deit3_small (pretrained=False, method=evit, tome_r=0, strength=0.0, evit_k=100)
+参数量 : 22.06 M
+FLOPs  : 2.95 G (名义值, 未反映动态选择)
+EViT   : 每层保留 100 个普通 token, 序列 197 -> 101
+设备   : cuda  batch=64
+延迟   : 0.26 ms/img
+吞吐量 : 3823.7 img/s

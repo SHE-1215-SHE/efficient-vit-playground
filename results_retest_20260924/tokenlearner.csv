@@ -1,0 +1,3 @@
+model,mode,best_val_acc_100cls
+deit3_small,frozen backbone + head only (197 tokens),92.4
+deit3_small,frozen backbone + TokenLearner L=8 + head,84.6

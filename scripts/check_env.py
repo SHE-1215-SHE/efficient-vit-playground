@@ -1,6 +1,8 @@
-"""环境自检脚本：上传服务器后先跑这个，确认依赖和 GPU 正常。
+"""环境自检脚本：依次验证 Python 版本、核心依赖、GPU 状态与模型前向链路。
 
-用法:
+输入: 无命令行参数；检查对象为当前 Python 环境与 CUDA 设备。
+输出: 终端打印四项自检结果（Python 版本 / 依赖版本 / GPU 显存占用 / 前向冒烟测试）。
+典型用法:
     python scripts/check_env.py
 """
 
@@ -31,8 +33,10 @@ def main():
             free, total = torch.cuda.mem_get_info(i)
             print(f"   GPU{i}: {props.name}  显存 {free / 1024**3:.1f}/{total / 1024**3:.1f} GB 空闲")
     else:
-        print("    ! 无可用 GPU（本机调试属正常，服务器上必须能看到 3090）")
+        print("    ! 无可用 GPU（本机调试属正常，服务器上必须能看到 4090）")
 
+    # NOTE: 冒烟测试不依赖 GPU，CPU 即可完成模型构建与前向链路验证；输出维度
+    # 断言 (2, 1000) 用于同时确认分类头结构与 ImageNet 类别数对齐。
     print("[4/4] 模型前向冒烟测试（CPU 即可）")
     from evit_lab.models import build_model
     model = build_model("deit_tiny", pretrained=False)

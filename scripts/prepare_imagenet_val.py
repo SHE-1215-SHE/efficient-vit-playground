@@ -1,18 +1,16 @@
-"""从官方 val tar 包整理出 ImageNet 验证集（服务器一次性准备步骤）。
+"""从官方 val tar 包整理出数字类目结构的 ImageNet 验证集（服务器一次性准备步骤）。
 
-背景: 服务器有 ILSVRC2012_img_val.tar（5万张平铺JPEG，无类别目录）。
-本脚本按官方 ground truth（assets/imagenet_2012_validation_synset_labels.txt,
-每行对应 ILSVRC2012_val_00000001.JPEG 递增）把图片整理成 数字类目/ 结构，
-之后 eval_accuracy.py 无需任何改动即可使用。
-
-类目映射说明: 标准 ImageNet 类索引 = wnid 排序序号（torchvision/timm 约定），
-wnid 全集恰好可从本标签文件取到（每类在 val 中都有 50 张）。
-
-正确性自检: 整理完成后用 deit3_small 在其上评测, Top-1 应约 81~83%；
-若接近随机(0.1%)说明映射错了。
-
-用法（服务器）:
+输入: ILSVRC2012_img_val.tar（50000 张平铺 JPEG，无类别目录）与官方 ground truth
+      标签文件 assets/imagenet_2012_validation_synset_labels.txt
+      （每行依次对应 ILSVRC2012_val_00000001.JPEG 起递增编号的图片）。
+输出: <out>/<0000..0999>/ 数字类目目录，eval_accuracy.py 可直接使用，无需改动。
+典型用法（服务器）:
     python scripts/prepare_imagenet_val.py --tar /newdisk/data/ImageNet/ILSVRC2012_img_val.tar --out data/imagenet_val
+
+NOTE: 类目映射——标准 ImageNet 类索引 = wnid 排序序号（torchvision/timm 约定），
+wnid 全集恰好可从标签文件取得（每类在 val 中都有 50 张）。
+正确性自检——整理完成后用 deit3_small 评测，Top-1 应约 81~83%；
+若接近随机（0.1%）则说明映射有误。
 """
 
 import argparse
@@ -43,11 +41,11 @@ def main():
 
     count = 0
     with tarfile.open(args.tar) as tar:
-        for member in tar:  # 流式解包, 边解边归类, 不落临时目录
+        for member in tar:  # NOTE: 流式遍历 tar 边解包边归类，不落地临时目录，避免磁盘同时保存两份数据
             if not member.isfile():
                 continue
             name = Path(member.name).name  # ILSVRC2012_val_XXXXXXXX.JPEG
-            img_no = int(name.split("_")[-1].split(".")[0])  # 1-indexed
+            img_no = int(name.split("_")[-1].split(".")[0])  # 1-indexed 编号，与标签文件行号对齐
             idx = wnid_to_idx[labels[img_no - 1]]
             with tar.extractfile(member) as src, open(out / f"{idx:04d}" / name, "wb") as dst:
                 shutil.copyfileobj(src, dst)
@@ -56,7 +54,7 @@ def main():
                 print(f"  已整理 {count}/50000")
     print(f"完成: {count} 张图片 -> {out}")
 
-    # 每类恰好50张的自检
+    # 自检: 标准 val 划分下每类应恰好 50 张，数量不符说明归类出错
     bad = [d.name for d in out.iterdir() if len(list(d.iterdir())) != 50]
     if bad:
         print(f"! 以下类目数量不是50, 请检查: {bad[:10]}")

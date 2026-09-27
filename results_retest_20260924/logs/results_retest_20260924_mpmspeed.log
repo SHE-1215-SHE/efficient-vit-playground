@@ -1,0 +1,34 @@
+加载模型: deit3_small (pretrained=False, method=tome, tome_r=4, strength=0.0, evit_k=0)
+参数量 : 22.06 M
+FLOPs  : 3.87 G (名义值, 未反映动态合并)
+ToMe   : 每层合并 4 个 token, 共 12 层, 197 -> 149 个
+设备   : cuda  batch=64
+延迟   : 0.68 ms/img
+吞吐量 : 1464.6 img/s
+加载模型: deit3_small (pretrained=False, method=tome, tome_r=8, strength=0.0, evit_k=0)
+参数量 : 22.06 M
+FLOPs  : 3.31 G (名义值, 未反映动态合并)
+ToMe   : 每层合并 8 个 token, 共 12 层, 197 -> 101 个
+设备   : cuda  batch=64
+延迟   : 0.85 ms/img
+吞吐量 : 1173.1 img/s
+加载模型: deit3_small (pretrained=False, method=tome, tome_r=12, strength=0.0, evit_k=0)
+参数量 : 22.06 M
+FLOPs  : 2.76 G (名义值, 未反映动态合并)
+ToMe   : 每层合并 12 个 token, 共 12 层, 197 -> 53 个
+设备   : cuda  batch=64
+延迟   : 0.83 ms/img
+吞吐量 : 1204.6 img/s
+加载模型: deit3_small (pretrained=False, method=tome-adaptive, tome_r=12, strength=0.7, evit_k=0)
+参数量 : 22.06 M
+FLOPs  : 3.00 G (名义值, 未反映动态合并)
+ToMe   : 每层合并 12 个 token, 共 12 层, 197 -> 53 个
+设备   : cuda  batch=64
+延迟   : 0.66 ms/img
+吞吐量 : 1511.4 img/s
+===== 速度补跑完成 2026年 09月 24日 星期四 16:31:58 CST =====
+name,throughput_img_s,latency_ms_per_img
+mpm_r4,1464.6,0.68
+mpm_r8,1173.1,0.85
+mpm_r12,1204.6,0.83
+adaptive_mpm_r12,1511.4,0.66

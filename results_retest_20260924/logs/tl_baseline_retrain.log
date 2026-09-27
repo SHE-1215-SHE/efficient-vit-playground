@@ -1,0 +1,21 @@
+设备: cuda
+训练/验证: 45000/5000 (100类)
+模式: 基线(仅训头, 197 token) | 可训练参数: 385000 (骨干已冻结)
+epoch 1: loss 0.4413 | val acc 92.06%  <- best | 87s
+epoch 2: loss 0.4251 | val acc 91.80% | 83s
+epoch 3: loss 0.4108 | val acc 91.84% | 86s
+epoch 4: loss 0.4046 | val acc 91.60% | 86s
+epoch 5: loss 0.4002 | val acc 91.90% | 86s
+epoch 6: loss 0.3954 | val acc 91.78% | 86s
+epoch 7: loss 0.3895 | val acc 92.28%  <- best | 86s
+epoch 8: loss 0.3891 | val acc 92.10% | 86s
+epoch 9: loss 0.3828 | val acc 91.84% | 86s
+epoch 10: loss 0.3820 | val acc 92.32%  <- best | 74s
+epoch 11: loss 0.3692 | val acc 92.20% | 67s
+epoch 12: loss 0.3668 | val acc 92.40%  <- best | 64s
+epoch 13: loss 0.3634 | val acc 92.12% | 58s
+epoch 14: loss 0.3677 | val acc 92.32% | 57s
+epoch 15: loss 0.3639 | val acc 92.32% | 57s
+
+完成, 最佳 val acc 92.40%, 权重在 results_retest_20260924/tl_baseline_best.pth
+etest_20260924/tl_baseline_best.pth

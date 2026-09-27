@@ -1,10 +1,12 @@
-"""下载 ImageNet-V2 验证集（matched-frequency 版，约1.2GB）。
+"""下载并解压 ImageNet-V2 验证集（matched-frequency 版，约 1.2GB）。
 
-国内网络如果 huggingface.co 连不上，脚本会自动切换到 hf-mirror.com 镜像。
-
-用法:
+输入: --out 指定的存放目录（默认 data）。
+输出: <out>/imagenetv2-matched-frequency-format-val/<0..999>/，共 1000 个数字类目目录。
+典型用法:
     python scripts/download_imagenetv2.py --out data
-下载并解压后得到 data/imagenetv2-matched-frequency-format-val/<0..999>/
+
+NOTE: 国内网络直连 huggingface.co 经常不可达，官方源请求抛出异常后自动回退到
+hf-mirror.com 镜像重试，无需预先配置代理或镜像环境变量。
 """
 
 import argparse
@@ -12,7 +14,8 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
-# 官方 ImageNet-V2 的 HuggingFace 托管地址
+# ImageNet-V2 官方数据的 HuggingFace 托管地址；镜像源内容一致，
+# 仅在官方域名网络不可达时作为回退使用
 HF_URL = "https://huggingface.co/datasets/vaishaal/ImageNetV2/resolve/main/imagenetv2-matched-frequency.tar.gz"
 MIRROR_URL = "https://hf-mirror.com/datasets/vaishaal/ImageNetV2/resolve/main/imagenetv2-matched-frequency.tar.gz"
 
@@ -41,6 +44,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     extracted = out_dir / "imagenetv2-matched-frequency-format-val"
 
+    # NOTE: 类目目录数 >= 1000 视为数据完整，跳过重复下载，保证脚本可幂等重跑
     if extracted.exists() and len(list(extracted.iterdir())) >= 1000:
         print(f"已存在且完整，跳过下载: {extracted}")
         return
@@ -59,7 +63,7 @@ def main():
 
     n_dirs = len([d for d in extracted.iterdir() if d.is_dir()])
     assert n_dirs == 1000, f"解压后类别目录数应为1000，实际 {n_dirs}"
-    tar_path.unlink()  # 删除压缩包省磁盘
+    tar_path.unlink()  # 校验通过后删除压缩包，释放磁盘空间
     print(f"完成 ✓  验证集路径: {extracted}")
 
 

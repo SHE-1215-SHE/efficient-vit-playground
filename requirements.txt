@@ -1,5 +1,5 @@
 # 第①阶段核心依赖
-# 服务器(3090)安装 GPU 版 torch 时请用官方命令，例如：
+# 服务器(4090)安装 GPU 版 torch 时请用官方命令，例如：
 #   pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121
 # 然后再安装本文件其余依赖：
 #   pip install -r requirements.txt

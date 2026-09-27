@@ -1,9 +1,14 @@
-"""ToMe 正确性验证（本机 CPU 可跑，无需 GPU）。
+"""ToMe (Token Merging) 正确性验证，本机 CPU 可运行。
 
-三项检查:
-    1. r=0 等价性: 开了 ToMe 但 r=0 时，输出必须和原模型完全一致（挂钩没破坏计算图）
-    2. token 递减: r>0 时每层实际合并 r 个 token，12 层共删 depth*r 个
-    3. 输出合理: r>0 时 cls 输出与原模型的余弦相似度应远高于随机（随机≈0）
+守护的不变量:
+    1. r=0 等价性: apply_tome(model, 0) 仅注册挂钩不执行合并，输出与原模型逐元素
+       一致 (最大绝对误差 < 1e-4)，确保合并逻辑的注入不改变原计算路径。
+    2. token 预算守恒: r>0 时每层实际合并 r 个 token，depth 层共移除 depth*r 个，
+       逐层计数与配置严格一致。
+    3. 输出语义合理: r>0 时输出与原模型的余弦相似度显著高于随机基线
+       (随机权重下不相关输出的相似度期望约为 0)。
+    4. 熵引导自适应模式边界行为: strength=0 时逐层合并数退化为固定 r；
+       strength>0 时逐层自适应 r 每层均 > 0 且落在 [0.3r, 1.7r] 区间内。
 
 用法:
     python tests/test_tome.py                  # 随机权重快速验证
@@ -34,12 +39,13 @@ def main():
     pretrained = args.pretrained
     x = torch.randn(2, 3, 224, 224)
 
-    # 三个模型必须共享同一份权重（随机权重下每次build都不同），所以深拷贝
+    # 各对比模型必须共享同一份权重；随机权重下每次 build 的初始化不同，深拷贝保证可比性
     base = build_model(args.model, pretrained=pretrained)
     base.eval()
     with torch.no_grad():
         y_base = base(x)
 
+    # ---- 检查1: r=0 等价性 (捕获挂钩注入破坏原计算路径的回归) ----
     tome0 = copy.deepcopy(base)
     apply_tome(tome0, 0)
     tome0.eval()
@@ -49,7 +55,7 @@ def main():
     assert diff0 < 1e-4, f"r=0 等价性失败: 最大差异 {diff0}"
     print(f"[通过] 检查1 r=0 等价性: 最大差异 {diff0:.2e}")
 
-    # ---- 检查2: 每层合并 r 个 ----
+    # ---- 检查2: 逐层合并计数守恒 (捕获每层实际合并数偏离配置 r 的实现缺陷) ----
     tome = copy.deepcopy(base)
     apply_tome(tome, args.r)
     tome.eval()
@@ -62,14 +68,14 @@ def main():
     print(f"[通过] 检查2 token递减: 每层合并 {args.r} 个, "
           f"{n_layers} 层共删 {n_layers * args.r} 个 (197 -> {197 - n_layers * args.r})")
 
-    # ---- 检查3: 输出相关性 ----
+    # ---- 检查3: 输出语义合理 (捕获合并过程破坏关键 token 信息导致输出退化的缺陷) ----
     cos = torch.nn.functional.cosine_similarity(
         y_base.flatten(), y_tome.flatten(), dim=0).item()
     print(f"[通过] 检查3 输出余弦相似度: {cos:.4f}"
           + (" (预训练权重下应显著>0, 论文水平 r=8 约在 0.8+)" if pretrained
              else " (随机权重仅供参考, 加 --pretrained 才有意义)"))
 
-    # ---- 检查4: 熵引导自适应模式 ----
+    # ---- 检查4: 熵引导自适应模式边界行为 (捕获 strength=0 未退化为固定 r、自适应 r 越界) ----
     for strength in (0.0, 0.7):
         ada = copy.deepcopy(base)
         apply_tome(ada, args.r, strength=strength)

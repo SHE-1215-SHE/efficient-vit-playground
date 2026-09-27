@@ -19,10 +19,11 @@ checkpoints/
 *.onnx
 *.safetensors
 
-# 实验输出
+# 实验输出（证据日志例外：results_retest 的 logs 需随仓库发布以支撑可溯源声明）
 outputs/
 runs/
 *.log
+!results_retest_20260924/logs/*.log
 
 # IDE / 系统
 .idea/
@@ -33,6 +34,8 @@ Thumbs.db
 # 隐私文件（求职信息不上传）
 要求.jpg
 PROGRESS.md
+INTERVIEW.md
+README copy.md
 /2.png
 /3.png
 /2.jpg

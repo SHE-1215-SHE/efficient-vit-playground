@@ -1,0 +1,5 @@
+name,throughput_img_s,latency_ms_per_img
+mpm_r4,1464.6,0.68
+mpm_r8,1173.1,0.85
+mpm_r12,1204.6,0.83
+adaptive_mpm_r12,1511.4,0.66

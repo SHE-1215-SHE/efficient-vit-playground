@@ -30,7 +30,7 @@ for setting in "" "--tome-r 4" "--tome-r 8" "--tome-r 12" \
     python scripts/eval_speed.py --model $MODEL --device $DEV --batch-size $BS --no-pretrained $setting
 done
 
-echo "================ 2. 精度对比 (ImageNet-V2) ================"
+echo "================ 2. 精度对比 (ImageNet-Val)  ================"
 for setting in "" "--tome-r 4" "--tome-r 8" "--tome-r 12" \
                "--tome-r 4 --tome-strength 0.7" \
                "--tome-r 8 --tome-strength 0.7" \

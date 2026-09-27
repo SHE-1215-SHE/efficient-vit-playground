@@ -1,0 +1,6 @@
+name,top1,top5,final_tokens
+mpm_r4,80.60,95.07,149
+mpm_r8,78.61,93.88,101
+mpm_r12,74.64,91.41,53
+adaptive_mpm_r12,76.47,92.56,53
+pure_mpm_batch1,8.20,20.10,variable

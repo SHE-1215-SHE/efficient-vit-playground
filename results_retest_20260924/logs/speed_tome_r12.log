@@ -1,0 +1,7 @@
+加载模型: deit3_small (pretrained=False, method=tome, tome_r=12, strength=0.0, evit_k=0)
+参数量 : 22.06 M
+FLOPs  : 2.70 G (名义值, 未反映动态合并)
+ToMe   : 每层合并 12 个 token, 共 12 层, 197 -> 53 个
+设备   : cuda  batch=64
+延迟   : 0.27 ms/img
+吞吐量 : 3672.6 img/s
