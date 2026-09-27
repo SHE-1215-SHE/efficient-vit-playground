@@ -4,7 +4,7 @@
 
 ## 核心结果
 
-DeiT3-Small-384（22.06M），RTX 4090 / FP32 / batch=64，ImageNet-1k 官方 val 5 万张，全部数字见 `results_retest_20260924/`。
+DeiT3-Small（patch16, 224×224, 22.06M），RTX 4090 / FP32 / batch=64，ImageNet-1k 官方 val 5 万张，全部数字见 `results_retest_20260924/`。
 
 | 配置 | 最终 token | 吞吐 (img/s) | 加速比 | Top-1 | ΔTop-1 |
 |---|---|---|---|---|---|
